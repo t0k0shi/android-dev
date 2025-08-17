@@ -20,35 +20,37 @@ jobs:
           echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      - name: Restart headless emulator (systemd --user, robust)
+      - name: Start headless emulator (systemd --user or direct)
         run: |
-          set -eux
-          USER_NAME="${SUDO_USER:-$USER}"
-          USER_UID="$(id -u "$USER_NAME")"
+          set -euo pipefail
+          USER_NAME=azureuser
+          USER_UID=$(id -u "$USER_NAME")
           export XDG_RUNTIME_DIR="/run/user/${USER_UID}"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 
-          # user@UID のバスがあれば通常経路、無ければ --machine 経路で実行
+          ok=0
           if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
             systemctl --user daemon-reload || true
-            systemctl --user restart android-emulator.service
-            systemctl --user --no-pager status android-emulator.service || true
-          else
+            systemctl --user restart android-emulator.service || true
+            sleep 2
+            systemctl --user --no-pager status android-emulator.service && ok=1 || true
+          fi
+          if [ "$ok" -ne 1 ]; then
             systemctl --user --machine="${USER_NAME}@.host" daemon-reload || true
-            systemctl --user --machine="${USER_NAME}@.host" restart android-emulator.service
-            systemctl --user --machine="${USER_NAME}@.host" --no-pager status android-emulator.service || true
+            systemctl --user --machine="${USER_NAME}@.host" restart android-emulator.service || true
+            sleep 2
+            systemctl --user --machine="${USER_NAME}@.host" --no-pager status android-emulator.service && ok=1 || true
+          fi
+          if [ "$ok" -ne 1 ]; then
+            echo "[fallback] systemd --user で起動できなかったため直起動します"
+            nohup emulator -avd pixel6api34 \
+              -no-window -no-metrics -noaudio -no-boot-anim \
+              -gpu swiftshader_indirect -feature Vulkan=off \
+              -accel on -cores 2 -ports 5554,5555 >/tmp/emulator.log 2>&1 &
           fi
 
-      # .github/workflows/android-ui.yml の steps に追加（Waitの前でOK）
       - name: Pin device to emulator-5554
         run: echo "ANDROID_SERIAL=emulator-5554" >> "$GITHUB_ENV"
-
-      - name: Restart headless emulator (systemd --user)
-        run: |
-          systemctl --user daemon-reload || true
-          systemctl --user restart android-emulator.service
-          sleep 2
-          systemctl --user --no-pager status android-emulator.service || true
 
       - name: Wait for boot with heartbeat
         run: bash android-hello/scripts/wait-boot.sh
@@ -69,7 +71,6 @@ jobs:
           adb -s emulator-5554 logcat -d > artifacts/logcat.txt || true
           journalctl --user -u android-emulator.service -e -n 1000 > artifacts/emulator.log || true
           cp ~/.config/systemd/user/android-emulator.service artifacts/emulator.service || true
-          # レポート類を拾う
           if [ -d demo-app/app/build/reports/androidTests/connected ]; then
             cp -r demo-app/app/build/reports/androidTests/connected artifacts/test-report || true
           fi
@@ -79,5 +80,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-ui-artifacts
-          path: |
-            artifacts
+          path: artifacts
+
+      - name: Stop emulator (always)
+        if: always()
+        run: |
+          set -e
+          USER_NAME=azureuser
+          USER_UID=$(id -u "$USER_NAME")
+          export XDG_RUNTIME_DIR="/run/user/${USER_UID}"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          systemctl --user stop android-emulator.service 2>/dev/null || \
+          systemctl --user --machine="${USER_NAME}@.host" stop android-emulator.service 2>/dev/null || \
+          adb -s emulator-5554 emu kill || true
