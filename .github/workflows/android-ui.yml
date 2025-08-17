@@ -23,7 +23,6 @@ jobs:
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           adb version || true
 
-      # ★ systemd 管理のエミュを使う（重複起動/ポート競合を避ける）
       - name: "Emulator (systemd): restart"
         run: |
           set -euxo pipefail
@@ -31,23 +30,46 @@ jobs:
           rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
           systemctl --user start android-emulator.service || true
 
-      # ★ 心拍しながら待つ（無出力でKillされるのを防ぐ）
-      - name: "Wait boot (with heartbeat)"
-        timeout-minutes: 15
+      - name: "Wait boot (robust heartbeat)"
+        timeout-minutes: 20
         run: |
           set -euxo pipefail
           adb kill-server || true
           adb start-server
-          for i in $(seq 1 180); do
+
+          SERIAL="emulator-5554"  # systemd ユニットは -ports 5554,5555 固定
+          for i in $(seq 1 360); do   # 2秒×360=約12分待機
             echo "[wait:$i] devices:"
             adb devices -l || true
-            boot=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
-            if [ "$boot" = "1" ]; then
+
+            # 見えない時は直結復旧
+            if ! adb devices | grep -q "^$SERIAL"; then
+              adb connect 127.0.0.1:5555 || true
+              sleep 1
+            fi
+
+            state=$(adb -s "$SERIAL" get-state 2>/dev/null || true)
+            boot=$(adb -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+            boot2=$(adb -s "$SERIAL" shell getprop dev.bootcomplete 2>/dev/null | tr -d '\r' || true)
+            anim=$(adb -s "$SERIAL" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r' || true)
+            echo "state=$state boot=$boot dev.bootcomplete=$boot2 anim=$anim"
+
+            if [ "$boot" = "1" ] || [ "$boot2" = "1" ] || [ "$anim" = "stopped" ]; then
               echo "booted"; break
+            fi
+
+            # offline/unknown/空は ADB 再起動で自己修復
+            if [ "$state" = "offline" ] || [ "$state" = "unknown" ] || [ -z "$state" ]; then
+              adb kill-server || true
+              adb start-server
             fi
             sleep 2
           done
-          adb shell getprop sys.boot_completed | grep -q 1
+
+          # 最終アサート（必ず -s で対象を限定）
+          adb -s "$SERIAL" shell getprop sys.boot_completed | grep -q 1 \
+          || adb -s "$SERIAL" shell getprop dev.bootcomplete | grep -q 1 \
+          || { echo "Boot not completed in time"; exit 1; }
 
       - name: "Build & install (demo-app)"
         working-directory: demo-app
