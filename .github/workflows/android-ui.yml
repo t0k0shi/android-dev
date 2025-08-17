@@ -5,6 +5,11 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+# 同じブランチの古い実行をキャンセル（キュー滞留防止）
+concurrency:
+  group: android-ui-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ui-test:
     runs-on: self-hosted
@@ -29,18 +34,21 @@ jobs:
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 
           ok=0
+          # 1) 通常の user バス経由で起動
           if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
             systemctl --user daemon-reload || true
             systemctl --user restart android-emulator.service || true
             sleep 2
             systemctl --user --no-pager status android-emulator.service && ok=1 || true
           fi
+          # 2) フォールバック: --machine=<user>@.host 経由
           if [ "$ok" -ne 1 ]; then
             systemctl --user --machine="${USER_NAME}@.host" daemon-reload || true
             systemctl --user --machine="${USER_NAME}@.host" restart android-emulator.service || true
             sleep 2
             systemctl --user --machine="${USER_NAME}@.host" --no-pager status android-emulator.service && ok=1 || true
           fi
+          # 3) それでもダメなら CI 内でエミュを直起動
           if [ "$ok" -ne 1 ]; then
             echo "[fallback] systemd --user で起動できなかったため直起動します"
             nohup emulator -avd pixel6api34 \
@@ -67,13 +75,22 @@ jobs:
         if: always()
         run: |
           mkdir -p artifacts
+          # 画面キャプチャ & ログ
           adb -s emulator-5554 exec-out screencap -p > artifacts/screenshot.png || true
           adb -s emulator-5554 logcat -d > artifacts/logcat.txt || true
+          # systemd 経由のエミュログ（直起動時は無いことも）
           journalctl --user -u android-emulator.service -e -n 1000 > artifacts/emulator.log || true
+          # 直起動フォールバック時のログ
+          [ -f /tmp/emulator.log ] && cp /tmp/emulator.log artifacts/ci-emulator.log || true
+          # サービス定義の控え
           cp ~/.config/systemd/user/android-emulator.service artifacts/emulator.service || true
+          # テストレポート
           if [ -d demo-app/app/build/reports/androidTests/connected ]; then
             cp -r demo-app/app/build/reports/androidTests/connected artifacts/test-report || true
           fi
+          # 追加診断（任意だが便利）
+          adb -s emulator-5554 shell dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' > artifacts/window-focus.txt || true
+          adb -s emulator-5554 shell dumpsys power > artifacts/power.txt || true
 
       - name: Upload artifacts
         if: always()
