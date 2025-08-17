@@ -11,10 +11,10 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
 
     steps:
-      - name: Checkout
+      - name: "Checkout"
         uses: actions/checkout@v4
 
-      - name: Env / PATH
+      - name: "Env / PATH"
         run: |
           echo "ANDROID_HOME=$HOME/Android" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$HOME/Android" >> "$GITHUB_ENV"
@@ -24,23 +24,21 @@ jobs:
           adb version || true
 
       # ★ systemd 管理のエミュを使う（重複起動/ポート競合を避ける）
-      - name: Emulator (systemd): restart
+      - name: "Emulator (systemd): restart"
         run: |
           set -euxo pipefail
           systemctl --user stop android-emulator.service || true
           rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
           systemctl --user start android-emulator.service || true
 
-      # ★ 心拍しながら待つ（無出力10分でKillされるのを防ぐ）
-      - name: Wait boot (with heartbeat)
+      # ★ 心拍しながら待つ（無出力でKillされるのを防ぐ）
+      - name: "Wait boot (with heartbeat)"
         timeout-minutes: 15
         run: |
           set -euxo pipefail
           adb kill-server || true
           adb start-server
-          # 2秒間隔×180回 = 最大6分待ち
           for i in $(seq 1 180); do
-            adb get-state >/dev/null 2>&1 || true
             echo "[wait:$i] devices:"
             adb devices -l || true
             boot=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
@@ -51,20 +49,20 @@ jobs:
           done
           adb shell getprop sys.boot_completed | grep -q 1
 
-      - name: Build & install (demo-app)
+      - name: "Build & install (demo-app)"
         working-directory: demo-app
         run: |
           set -euxo pipefail
           ./gradlew --no-daemon :app:assembleDebug :app:installDebug
 
-      - name: Connected tests (demo-app)
+      - name: "Connected tests (demo-app)"
         working-directory: demo-app
         run: |
           set -euxo pipefail
           export ANDROID_SERIAL="$(adb devices | awk '/^emulator-/{print $1; exit}')"
           ./gradlew --no-daemon :app:connectedDebugAndroidTest --info
 
-      - name: Collect artifacts (report/screenshot/logcat/emulator.log)
+      - name: "Collect artifacts (report/screenshot/logcat/emulator.log)"
         if: always()
         run: |
           set -euxo pipefail
@@ -74,7 +72,7 @@ jobs:
           adb exec-out screencap -p > artifacts/screenshot.png || true
           adb logcat -d > artifacts/logcat.txt || true
 
-      - name: Upload artifacts
+      - name: "Upload artifacts"
         if: always()
         uses: actions/upload-artifact@v4
         with:
