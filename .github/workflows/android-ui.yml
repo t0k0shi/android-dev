@@ -7,14 +7,18 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# 同じブランチの古い実行をキャンセル（キュー滞留防止）
+# 最小権限
+permissions:
+  contents: read
+
+# 同じブランチの古い実行を自動キャンセル
 concurrency:
   group: android-ui-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   ui-test:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -31,7 +35,14 @@ jobs:
           echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      # systemd の常駐エミュが動いていたら止める（ポート衝突防止）
+      - name: Setup Java 17 (Temurin) with Gradle cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # systemd 常駐エミュが動いていたら止める（ポート衝突回避）
       - name: Ensure systemd emulator is not running (avoid port conflicts)
         run: |
           set -e
@@ -60,14 +71,36 @@ jobs:
         working-directory: demo-app
         run: ./gradlew --no-daemon :app:assembleDebug :app:installDebug
 
-      - name: Connected UI Tests (retry once)
+      - name: Android Lint
+        working-directory: demo-app
+        run: ./gradlew --no-daemon :app:lintDebug
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-report-${{ matrix.avd }}
+          path: demo-app/app/build/reports/lint-results-debug.html
+
+      - name: Unit tests (if any)
+        working-directory: demo-app
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Connected UI Tests (retry once + quick logs)
         working-directory: demo-app
         run: |
           set -e
-          ./gradlew --no-daemon :app:connectedDebugAndroidTest && exit 0
+          if ./gradlew --no-daemon :app:connectedDebugAndroidTest; then
+            exit 0
+          fi
           echo "Retrying once after 20s..."
           sleep 20
-          ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          if ./gradlew --no-daemon :app:connectedDebugAndroidTest; then
+            exit 0
+          fi
+          echo "==== Last 200 lines of logcat (error hints) ===="
+          adb -s "${ANDROID_SERIAL}" logcat -d | tail -n 200 || true
+          exit 1
 
       - name: Collect artifacts (${{ matrix.avd }})
         if: always()
