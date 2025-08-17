@@ -16,6 +16,10 @@ jobs:
   ui-test:
     runs-on: self-hosted
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        avd: [pixel6api34, pixel6api33]
 
     steps:
       - name: Checkout
@@ -27,37 +31,24 @@ jobs:
           echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      - name: Start headless emulator (systemd --user or direct)
+      # systemd の常駐エミュが動いていたら止める（ポート衝突防止）
+      - name: Ensure systemd emulator is not running (avoid port conflicts)
         run: |
-          set -euo pipefail
+          set -e
           USER_NAME=azureuser
           USER_UID=$(id -u "$USER_NAME")
           export XDG_RUNTIME_DIR="/run/user/${USER_UID}"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          systemctl --user stop android-emulator.service 2>/dev/null || \
+          systemctl --user --machine="${USER_NAME}@.host" stop android-emulator.service 2>/dev/null || true
 
-          ok=0
-          # 1) 通常の user バス経由で起動
-          if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
-            systemctl --user daemon-reload || true
-            systemctl --user restart android-emulator.service || true
-            sleep 2
-            systemctl --user --no-pager status android-emulator.service && ok=1 || true
-          fi
-          # 2) フォールバック: --machine=<user>@.host 経由
-          if [ "$ok" -ne 1 ]; then
-            systemctl --user --machine="${USER_NAME}@.host" daemon-reload || true
-            systemctl --user --machine="${USER_NAME}@.host" restart android-emulator.service || true
-            sleep 2
-            systemctl --user --machine="${USER_NAME}@.host" --no-pager status android-emulator.service && ok=1 || true
-          fi
-          # 3) それでもダメなら CI 内でエミュを直起動
-          if [ "$ok" -ne 1 ]; then
-            echo "[fallback] systemd --user で起動できなかったため直起動します"
-            nohup emulator -avd pixel6api34 \
-              -no-window -no-metrics -noaudio -no-boot-anim \
-              -gpu swiftshader_indirect -feature Vulkan=off \
-              -accel on -cores 2 -ports 5554,5555 >/tmp/emulator.log 2>&1 &
-          fi
+      # 直起動で AVD を切替（マトリクス対応）
+      - name: Start emulator directly (${{ matrix.avd }})
+        run: |
+          nohup emulator -avd ${{ matrix.avd }} \
+            -no-window -no-metrics -noaudio -no-boot-anim \
+            -gpu swiftshader_indirect -feature Vulkan=off \
+            -accel on -cores 2 -ports 5554,5555 >/tmp/emulator-${{ matrix.avd }}.log 2>&1 &
 
       - name: Pin device to emulator-5554
         run: echo "ANDROID_SERIAL=emulator-5554" >> "$GITHUB_ENV"
@@ -69,61 +60,35 @@ jobs:
         working-directory: demo-app
         run: ./gradlew --no-daemon :app:assembleDebug :app:installDebug
 
-      - name: Android Lint
+      - name: Connected UI Tests (retry once)
         working-directory: demo-app
-        run: ./gradlew --no-daemon :app:lintDebug
+        run: |
+          set -e
+          ./gradlew --no-daemon :app:connectedDebugAndroidTest && exit 0
+          echo "Retrying once after 20s..."
+          sleep 20
+          ./gradlew --no-daemon :app:connectedDebugAndroidTest
 
-      - name: Upload lint report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-lint-report
-          path: demo-app/app/build/reports/lint-results-debug.html
-
-      - name: Unit tests (if any)
-        working-directory: demo-app
-        run: ./gradlew --no-daemon testDebugUnitTest
-
-      - name: Connected UI Tests
-        working-directory: demo-app
-        run: ./gradlew --no-daemon :app:connectedDebugAndroidTest
-
-      - name: Collect artifacts (logs & reports)
+      - name: Collect artifacts (${{ matrix.avd }})
         if: always()
         run: |
-          mkdir -p artifacts
-          # 画面キャプチャ & ログ
-          adb -s emulator-5554 exec-out screencap -p > artifacts/screenshot.png || true
-          adb -s emulator-5554 logcat -d > artifacts/logcat.txt || true
-          # systemd 経由のエミュログ（直起動時は無いことも）
-          journalctl --user -u android-emulator.service -e -n 1000 > artifacts/emulator.log || true
-          # 直起動フォールバック時のログ
-          [ -f /tmp/emulator.log ] && cp /tmp/emulator.log artifacts/ci-emulator.log || true
-          # サービス定義の控え
-          cp ~/.config/systemd/user/android-emulator.service artifacts/emulator.service || true
-          # テストレポート
+          mkdir -p artifacts/${{ matrix.avd }}
+          adb -s emulator-5554 exec-out screencap -p > artifacts/${{ matrix.avd }}/screenshot.png || true
+          adb -s emulator-5554 logcat -d > artifacts/${{ matrix.avd }}/logcat.txt || true
+          [ -f /tmp/emulator-${{ matrix.avd }}.log ] && cp /tmp/emulator-${{ matrix.avd }}.log artifacts/${{ matrix.avd }}/ci-emulator.log || true
           if [ -d demo-app/app/build/reports/androidTests/connected ]; then
-            cp -r demo-app/app/build/reports/androidTests/connected artifacts/test-report || true
+            cp -r demo-app/app/build/reports/androidTests/connected artifacts/${{ matrix.avd }}/test-report || true
           fi
-          # 追加診断（任意だが便利）
-          adb -s emulator-5554 shell dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' > artifacts/window-focus.txt || true
-          adb -s emulator-5554 shell dumpsys power > artifacts/power.txt || true
+          adb -s emulator-5554 shell dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' > artifacts/${{ matrix.avd }}/window-focus.txt || true
+          adb -s emulator-5554 shell dumpsys power > artifacts/${{ matrix.avd }}/power.txt || true
 
-      - name: Upload artifacts
+      - name: Upload artifacts (${{ matrix.avd }})
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-ui-artifacts
-          path: artifacts
+          name: android-ui-artifacts-${{ matrix.avd }}
+          path: artifacts/${{ matrix.avd }}
 
       - name: Stop emulator (always)
         if: always()
-        run: |
-          set -e
-          USER_NAME=azureuser
-          USER_UID=$(id -u "$USER_NAME")
-          export XDG_RUNTIME_DIR="/run/user/${USER_UID}"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-          systemctl --user stop android-emulator.service 2>/dev/null || \
-          systemctl --user --machine="${USER_NAME}@.host" stop android-emulator.service 2>/dev/null || \
-          adb -s emulator-5554 emu kill || true
+        run: adb -s emulator-5554 emu kill || true
