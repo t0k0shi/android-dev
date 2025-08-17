@@ -20,6 +20,29 @@ jobs:
           echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
+      - name: Restart headless emulator (systemd --user, robust)
+        run: |
+          set -eux
+          USER_NAME="${SUDO_USER:-$USER}"
+          USER_UID="$(id -u "$USER_NAME")"
+          export XDG_RUNTIME_DIR="/run/user/${USER_UID}"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+          # user@UID のバスがあれば通常経路、無ければ --machine 経路で実行
+          if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+            systemctl --user daemon-reload || true
+            systemctl --user restart android-emulator.service
+            systemctl --user --no-pager status android-emulator.service || true
+          else
+            systemctl --user --machine="${USER_NAME}@.host" daemon-reload || true
+            systemctl --user --machine="${USER_NAME}@.host" restart android-emulator.service
+            systemctl --user --machine="${USER_NAME}@.host" --no-pager status android-emulator.service || true
+          fi
+
+      # .github/workflows/android-ui.yml の steps に追加（Waitの前でOK）
+      - name: Pin device to emulator-5554
+        run: echo "ANDROID_SERIAL=emulator-5554" >> "$GITHUB_ENV"
+
       - name: Restart headless emulator (systemd --user)
         run: |
           systemctl --user daemon-reload || true
