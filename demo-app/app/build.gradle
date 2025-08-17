@@ -1,0 +1,47 @@
+plugins {
+  id "com.android.application" version "8.5.2"
+}
+
+android {
+  namespace "com.example.demoapp"
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "com.example.demoapp"
+    minSdk 26
+    targetSdk 34
+    versionCode 1
+    versionName "1.0"
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    testInstrumentationRunnerArguments clearPackageData: "true"
+  }
+
+  buildTypes {
+    release { minifyEnabled false }
+    debug { debuggable true }
+  }
+
+  packaging { resources { excludes += ["META-INF/*"] } }
+
+  // Orchestratorで安定化（前に入れてくれていたものを維持）
+  testOptions {
+    animationsDisabled = true
+    execution 'ANDROIDX_TEST_ORCHESTRATOR'
+  }
+}
+
+dependencies {
+  implementation "androidx.appcompat:appcompat:1.6.1"
+  implementation "com.google.android.material:material:1.11.0"
+  implementation "androidx.constraintlayout:constraintlayout:2.1.4"
+
+  androidTestImplementation "androidx.test:core:1.5.0"
+  androidTestImplementation "androidx.test:runner:1.5.2"
+  androidTestImplementation "androidx.test:rules:1.5.0"
+  androidTestImplementation "androidx.test.ext:junit:1.1.5"
+  androidTestImplementation "androidx.test.espresso:espresso-core:3.5.1"
+  androidTestImplementation "androidx.test.uiautomator:uiautomator:2.2.0"
+
+  // Orchestrator
+  androidTestUtil "androidx.test:orchestrator:1.5.0"
+}

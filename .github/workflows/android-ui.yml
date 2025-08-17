@@ -1,102 +1,60 @@
-name: Android UI Tests (Headless, Self-hosted)
+name: Android UI
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
-  ui-tests:
-    runs-on: [self-hosted, Linux, X64]
+  ui-test:
+    runs-on: self-hosted
+    timeout-minutes: 40
 
     steps:
-      - name: "Checkout"
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: "Env / PATH"
+      - name: Ensure Android SDK PATH
         run: |
-          echo "ANDROID_HOME=$HOME/Android" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$HOME/Android" >> "$GITHUB_ENV"
           echo "$HOME/Android/platform-tools" >> "$GITHUB_PATH"
           echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          adb version || true
 
-      - name: "Emulator (systemd): restart"
+      - name: Restart headless emulator (systemd --user)
         run: |
-          set -euxo pipefail
-          systemctl --user stop android-emulator.service || true
-          rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
-          systemctl --user start android-emulator.service || true
+          systemctl --user daemon-reload || true
+          systemctl --user restart android-emulator.service
+          sleep 2
+          systemctl --user --no-pager status android-emulator.service || true
 
-      - name: "Wait boot (robust heartbeat)"
-        timeout-minutes: 20
-        run: |
-          set -euxo pipefail
-          adb kill-server || true
-          adb start-server
+      - name: Wait for boot with heartbeat
+        run: bash android-hello/scripts/wait-boot.sh
 
-          SERIAL="emulator-5554"  # systemd ユニットは -ports 5554,5555 固定
-          for i in $(seq 1 360); do   # 2秒×360=約12分待機
-            echo "[wait:$i] devices:"
-            adb devices -l || true
-
-            # 見えない時は直結復旧
-            if ! adb devices | grep -q "^$SERIAL"; then
-              adb connect 127.0.0.1:5555 || true
-              sleep 1
-            fi
-
-            state=$(adb -s "$SERIAL" get-state 2>/dev/null || true)
-            boot=$(adb -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
-            boot2=$(adb -s "$SERIAL" shell getprop dev.bootcomplete 2>/dev/null | tr -d '\r' || true)
-            anim=$(adb -s "$SERIAL" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r' || true)
-            echo "state=$state boot=$boot dev.bootcomplete=$boot2 anim=$anim"
-
-            if [ "$boot" = "1" ] || [ "$boot2" = "1" ] || [ "$anim" = "stopped" ]; then
-              echo "booted"; break
-            fi
-
-            # offline/unknown/空は ADB 再起動で自己修復
-            if [ "$state" = "offline" ] || [ "$state" = "unknown" ] || [ -z "$state" ]; then
-              adb kill-server || true
-              adb start-server
-            fi
-            sleep 2
-          done
-
-          # 最終アサート（必ず -s で対象を限定）
-          adb -s "$SERIAL" shell getprop sys.boot_completed | grep -q 1 \
-          || adb -s "$SERIAL" shell getprop dev.bootcomplete | grep -q 1 \
-          || { echo "Boot not completed in time"; exit 1; }
-
-      - name: "Build & install (demo-app)"
+      - name: Build & Install Debug
         working-directory: demo-app
-        run: |
-          set -euxo pipefail
-          ./gradlew --no-daemon :app:assembleDebug :app:installDebug
+        run: ./gradlew --no-daemon :app:assembleDebug :app:installDebug
 
-      - name: "Connected tests (demo-app)"
+      - name: Connected UI Tests
         working-directory: demo-app
-        run: |
-          set -euxo pipefail
-          export ANDROID_SERIAL="$(adb devices | awk '/^emulator-/{print $1; exit}')"
-          ./gradlew --no-daemon :app:connectedDebugAndroidTest --info
+        run: ./gradlew --no-daemon :app:connectedDebugAndroidTest
 
-      - name: "Collect artifacts (report/screenshot/logcat/emulator.log)"
+      - name: Collect artifacts (logs & reports)
         if: always()
         run: |
-          set -euxo pipefail
           mkdir -p artifacts
-          [ -f "$HOME/emulator.log" ] && cp "$HOME/emulator.log" artifacts/emulator.log || true
-          cp -r demo-app/app/build/reports/androidTests/connected/debug artifacts/test-report || true
-          adb exec-out screencap -p > artifacts/screenshot.png || true
-          adb logcat -d > artifacts/logcat.txt || true
+          adb -s emulator-5554 exec-out screencap -p > artifacts/screenshot.png || true
+          adb -s emulator-5554 logcat -d > artifacts/logcat.txt || true
+          journalctl --user -u android-emulator.service -e -n 1000 > artifacts/emulator.log || true
+          cp ~/.config/systemd/user/android-emulator.service artifacts/emulator.service || true
+          # レポート類を拾う
+          if [ -d demo-app/app/build/reports/androidTests/connected ]; then
+            cp -r demo-app/app/build/reports/androidTests/connected artifacts/test-report || true
+          fi
 
-      - name: "Upload artifacts"
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-ui-artifacts
-          path: artifacts
+          path: |
+            artifacts
