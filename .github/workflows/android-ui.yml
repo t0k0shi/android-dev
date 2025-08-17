@@ -4,16 +4,17 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   ui-tests:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Ensure ANDROID SDK in PATH
+      - name: Env / PATH
         run: |
           echo "ANDROID_HOME=$HOME/Android" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$HOME/Android" >> "$GITHUB_ENV"
@@ -22,35 +23,48 @@ jobs:
           echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           adb version || true
 
-      - name: Boot emulator (headless)
+      # ★ systemd 管理のエミュを使う（重複起動/ポート競合を避ける）
+      - name: Emulator (systemd): restart
+        run: |
+          set -euxo pipefail
+          systemctl --user stop android-emulator.service || true
+          rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
+          systemctl --user start android-emulator.service || true
+
+      # ★ 心拍しながら待つ（無出力10分でKillされるのを防ぐ）
+      - name: Wait boot (with heartbeat)
+        timeout-minutes: 15
         run: |
           set -euxo pipefail
           adb kill-server || true
-          pkill -f "emulator .*pixel6api34" || true
-          pkill -f qemu-system || true
-          rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
-
-          # スクリプトがあれば使用（無ければ直起動）
-          if [ -x "$HOME/work/android-dev/android-hello/scripts/emulator-up.sh" ]; then
-            "$HOME/work/android-dev/android-hello/scripts/emulator-up.sh"
-          else
-            emulator -avd pixel6api34 -no-window -no-metrics -noaudio -no-boot-anim \
-              -gpu swiftshader_indirect -feature Vulkan=off -accel on -cores 2 -ports 5554,5555 \
-              > "$HOME/emulator.log" 2>&1 &
-          fi
-
           adb start-server
-          adb wait-for-device
-          adb shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done'
-          adb shell settings put system screen_off_timeout 2147483647 || true
+          # 2秒間隔×180回 = 最大6分待ち
+          for i in $(seq 1 180); do
+            adb get-state >/dev/null 2>&1 || true
+            echo "[wait:$i] devices:"
+            adb devices -l || true
+            boot=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+            if [ "$boot" = "1" ]; then
+              echo "booted"; break
+            fi
+            sleep 2
+          done
+          adb shell getprop sys.boot_completed | grep -q 1
 
-      - name: Build & connected tests
+      - name: Build & install (demo-app)
         working-directory: demo-app
         run: |
           set -euxo pipefail
-          ./gradlew --no-daemon :app:assembleDebug :app:connectedDebugAndroidTest
+          ./gradlew --no-daemon :app:assembleDebug :app:installDebug
 
-      - name: Collect artifacts (log, report, screenshot, logcat)
+      - name: Connected tests (demo-app)
+        working-directory: demo-app
+        run: |
+          set -euxo pipefail
+          export ANDROID_SERIAL="$(adb devices | awk '/^emulator-/{print $1; exit}')"
+          ./gradlew --no-daemon :app:connectedDebugAndroidTest --info
+
+      - name: Collect artifacts (report/screenshot/logcat/emulator.log)
         if: always()
         run: |
           set -euxo pipefail
@@ -66,8 +80,3 @@ jobs:
         with:
           name: android-ui-artifacts
           path: artifacts
-
-      - name: Shutdown emulator
-        if: always()
-        run: |
-          adb -s "$(adb devices | awk '/^emulator-/{print $1; exit}')" emu kill || true
