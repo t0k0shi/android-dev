@@ -1,0 +1,85 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Emulator: Up",
+      "type": "shell",
+      "command": "${env:HOME}/bin/emulator-up.sh",
+      "options": {
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/emulator:${env:HOME}/Android/platform-tools:${env:HOME}/Android/cmdline-tools/latest/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Emulator: Wait Boot",
+      "type": "shell",
+      "command": "adb wait-for-device && adb shell 'while [ \"$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 1; done; echo booted'",
+      "options": {
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/emulator:${env:HOME}/Android/platform-tools:${env:HOME}/Android/cmdline-tools/latest/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Hello: Build & Install",
+      "type": "shell",
+      "command": "${env:HOME}/bin/build-install-hello.sh",
+      "options": {
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/emulator:${env:HOME}/Android/platform-tools:${env:HOME}/Android/cmdline-tools/latest/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Emulator: Down",
+      "type": "shell",
+      "command": "adb -s emulator-5554 emu kill || true",
+      "options": {
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/emulator:${env:HOME}/Android/platform-tools:${env:HOME}/Android/cmdline-tools/latest/bin:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Gradle: Install Debug (demo-app)",
+      "type": "shell",
+      "command": "./gradlew :app:assembleDebug :app:installDebug",
+      "options": {
+        "cwd": "${env:HOME}/work/demo-app",
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Gradle: Connected Tests (demo-app)",
+      "type": "shell",
+      "command": "export ANDROID_SERIAL=$(adb devices | awk '/^emulator-/{print $1; exit}'); ./gradlew :app:connectedDebugAndroidTest --info",
+      "options": {
+        "cwd": "${env:HOME}/work/demo-app",
+        "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Android",
+          "PATH": "${env:HOME}/Android/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    }
+  ]
+}

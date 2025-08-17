@@ -1,0 +1,73 @@
+name: Android UI Tests (Headless, Self-hosted)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  ui-tests:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure ANDROID SDK in PATH
+        run: |
+          echo "ANDROID_HOME=$HOME/Android" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$HOME/Android" >> "$GITHUB_ENV"
+          echo "$HOME/Android/platform-tools" >> "$GITHUB_PATH"
+          echo "$HOME/Android/emulator" >> "$GITHUB_PATH"
+          echo "$HOME/Android/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          adb version || true
+
+      - name: Boot emulator (headless)
+        run: |
+          set -euxo pipefail
+          adb kill-server || true
+          pkill -f "emulator .*pixel6api34" || true
+          pkill -f qemu-system || true
+          rm -f ~/.android/avd/pixel6api34.avd/*.lock* ~/.android/avd/pixel6api34.avd/*.pid ~/.android/avd/pixel6api34.avd/*.tmp || true
+
+          # スクリプトがあれば使用（無ければ直起動）
+          if [ -x "$HOME/work/android-dev/android-hello/scripts/emulator-up.sh" ]; then
+            "$HOME/work/android-dev/android-hello/scripts/emulator-up.sh"
+          else
+            emulator -avd pixel6api34 -no-window -no-metrics -noaudio -no-boot-anim \
+              -gpu swiftshader_indirect -feature Vulkan=off -accel on -cores 2 -ports 5554,5555 \
+              > "$HOME/emulator.log" 2>&1 &
+          fi
+
+          adb start-server
+          adb wait-for-device
+          adb shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done'
+          adb shell settings put system screen_off_timeout 2147483647 || true
+
+      - name: Build & connected tests
+        working-directory: demo-app
+        run: |
+          set -euxo pipefail
+          ./gradlew --no-daemon :app:assembleDebug :app:connectedDebugAndroidTest
+
+      - name: Collect artifacts (log, report, screenshot, logcat)
+        if: always()
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts
+          [ -f "$HOME/emulator.log" ] && cp "$HOME/emulator.log" artifacts/emulator.log || true
+          cp -r demo-app/app/build/reports/androidTests/connected/debug artifacts/test-report || true
+          adb exec-out screencap -p > artifacts/screenshot.png || true
+          adb logcat -d > artifacts/logcat.txt || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-artifacts
+          path: artifacts
+
+      - name: Shutdown emulator
+        if: always()
+        run: |
+          adb -s "$(adb devices | awk '/^emulator-/{print $1; exit}')" emu kill || true

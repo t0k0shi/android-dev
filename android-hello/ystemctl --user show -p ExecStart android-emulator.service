@@ -1,0 +1,1 @@
+ExecStart={ path=/bin/bash ; argv[]=/bin/bash -lc emulator -avd pixel6api34    -no-window -no-metrics -noaudio -no-boot-anim    -gpu swiftshader_indirect -feature Vulkan=off    -accel on -cores 2 -ports 5554,5555 ; ignore_errors=no ; start_time=[Sun 2025-08-17 04:15:20 UTC] ; stop_time=[Sun 2025-08-17 04:15:20 UTC] ; pid=790099 ; code=exited ; status=1 }

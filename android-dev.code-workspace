@@ -1,0 +1,87 @@
+{
+  "folders": [
+    { "name": "demo-app",      "path": "demo-app" },
+    { "name": "android-hello", "path": "android-hello" }
+  ],
+  "settings": {
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Emulator: Start (systemd)",
+        "type": "shell",
+        "command": "systemctl --user start android-emulator.service",
+        "problemMatcher": []
+      },
+      {
+        "label": "Emulator: Stop (systemd)",
+        "type": "shell",
+        "command": "systemctl --user stop android-emulator.service || true",
+        "problemMatcher": []
+      },
+      {
+        "label": "Emulator: Status (journal tail)",
+        "type": "shell",
+        "command": "journalctl --user -u android-emulator.service -e | tail -n 120",
+        "problemMatcher": []
+      },
+      {
+        "label": "Emulator: Wait Boot",
+        "type": "shell",
+        "command": "adb wait-for-device && adb shell 'while [ \"$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 1; done; echo booted'",
+        "options": {
+          "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+          "env": {
+            "ANDROID_HOME": "${env:HOME}/Android",
+            "PATH": "${env:HOME}/Android/platform-tools:${env:PATH}"
+          }
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Gradle: Install Debug (demo-app)",
+        "type": "shell",
+        "command": "./gradlew :app:assembleDebug :app:installDebug",
+        "options": {
+          "cwd": "${workspaceFolder:demo-app}",
+          "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+          "env": {
+            "ANDROID_HOME": "${env:HOME}/Android",
+            "PATH": "${env:HOME}/Android/platform-tools:${env:PATH}"
+          }
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Gradle: Connected Tests (demo-app)",
+        "type": "shell",
+        "command": "export ANDROID_SERIAL=$(adb devices | awk '/^emulator-/{print $1; exit}'); ./gradlew :app:connectedDebugAndroidTest --info",
+        "options": {
+          "cwd": "${workspaceFolder:demo-app}",
+          "shell": { "executable": "/bin/bash", "args": ["-lc"] },
+          "env": {
+            "ANDROID_HOME": "${env:HOME}/Android",
+            "PATH": "${env:HOME}/Android/platform-tools:${env:PATH}"
+          }
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Full cycle: start→wait→install→test",
+        "type": "shell",
+        "command": "echo Done",
+        "dependsOn": [
+          "Emulator: Start (systemd)",
+          "Emulator: Wait Boot",
+          "Gradle: Install Debug (demo-app)",
+          "Gradle: Connected Tests (demo-app)"
+        ],
+        "dependsOrder": "sequence",
+        "group": "build",
+        "problemMatcher": []
+      }
+    ]
+  }
+}

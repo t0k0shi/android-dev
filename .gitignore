@@ -1,0 +1,21 @@
+# Gradle/Android build
+.gradle/
+**/build/
+**/captures/
+**/.cxx/
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# Logs & Artifacts
+*.log
+artifacts/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Android SDK (誤コミット防止)
+Android/
