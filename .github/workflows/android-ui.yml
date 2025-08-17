@@ -3,6 +3,8 @@ name: Android UI
 on:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 # 同じブランチの古い実行をキャンセル（キュー滞留防止）
@@ -66,6 +68,21 @@ jobs:
       - name: Build & Install Debug
         working-directory: demo-app
         run: ./gradlew --no-daemon :app:assembleDebug :app:installDebug
+
+      - name: Android Lint
+        working-directory: demo-app
+        run: ./gradlew --no-daemon :app:lintDebug
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-report
+          path: demo-app/app/build/reports/lint-results-debug.html
+
+      - name: Unit tests (if any)
+        working-directory: demo-app
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Connected UI Tests
         working-directory: demo-app
